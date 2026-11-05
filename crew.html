@@ -85,7 +85,20 @@ footer{max-width:880px;margin:0 auto;padding:0 16px 40px;color:var(--muted);font
 <script>
 const API="https://okquucijqhzljxwrjwyh.supabase.co/functions/v1/crew-directory";
 const DEPTS=[["camera","Camera"],["grip","Grip"],["electric","Electric"],["sound","Sound"],["production","Production / PA"],["art","Art & Set Dressing"],["data","Data / DIT"],["locations","Locations"],["wardrobe","Wardrobe"],["hmu","Hair & Makeup"],["transport","Transportation"],["post","Post"],["other","Other"]];
-const AV={available:["Available","done"],limited:["Limited","open"],booked:["Booked",""]};
+// Live availability, kept current by each member's weekly check-in and by official productions.
+const pad=n=>String(n).padStart(2,"0"), today=(d=>d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate()))(new Date());
+const md=s=>new Date(+s.slice(0,4),+s.slice(5,7)-1,+s.slice(8,10)).toLocaleString("en-US",{month:"short",day:"numeric"});
+function status(r){
+  const a=r.availability||"available", conf=r.confirmed_at?Math.max(0,Math.floor((Date.now()-new Date(r.confirmed_at).getTime())/864e5)):null;
+  if(a==="booked"){if(r.booked_until&&r.booked_until<today)return {label:"Wrapped, not confirmed",cls:"",free:false,conf,rank:3,stale:true};return {label:r.booked_until?"Booked through "+md(r.booked_until):"Booked",cls:"",free:false,conf,rank:4,booked:true}}
+  if(a==="not_looking") return {label:"Not looking",cls:"",free:false,conf,rank:5};
+  if(conf!=null&&conf>14) return {label:"Not confirmed",cls:"",free:false,conf,rank:3,stale:true};
+  if(a==="from"&&r.avail_from&&r.avail_from>today) return {label:"Available from "+md(r.avail_from),cls:"open",free:false,conf,rank:2};
+  if(a==="hold") return {label:"On hold",cls:"open",free:true,conf,rank:1};
+  if(a==="limited") return {label:"Limited",cls:"open",free:true,conf,rank:1};
+  return {label:"Available",cls:"done",free:true,conf,rank:0};
+}
+const confText=t=>t.conf==null||t.booked?"":(t.stale?"Last confirmed ":"Confirmed ")+(t.conf===0?"today":t.conf===1?"yesterday":t.conf+" days ago");
 const st={rows:null,q:"",dept:"all",f:{avail:false,cert:false,ver:false},open:null,err:false};
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -94,18 +107,18 @@ const ini=n=>String(n||"?").split(/\s+/).filter(Boolean).slice(0,2).map(w=>w[0].
 const cert=r=>(+r.modules_done||0)>=8||(r.badges||[]).includes("Set Ready Certified");
 function safeUrl(u){u=String(u||"").trim();if(!u)return "";if(!/^https?:\/\//i.test(u))u="https://"+u;try{const x=new URL(u);return /^https?:$/.test(x.protocol)&&x.hostname.includes(".")?x.href:""}catch(_){return ""}}
 function matches(){
-  const toks=st.q.trim().toLowerCase().split(/\s+/).filter(Boolean), rank={available:0,limited:1,booked:2};
+  const toks=st.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
   return st.rows.filter(r=>{
     if(st.dept!=="all"&&r.dept!==st.dept) return false;
-    if(st.f.avail&&r.availability!=="available") return false;
+    if(st.f.avail&&!status(r).free) return false;
     if(st.f.cert&&!cert(r)) return false;
     if(st.f.ver&&!r.verified) return false;
     const hay=[r.name,r.positions,dn(r.dept),r.city,r.union_local,r.bio,...(r.badges||[]),...(r.gear||[]).flat(),r.verified?"verified":"",cert(r)?"certified set ready":""].join(" ").toLowerCase();
     return toks.every(t=>hay.includes(t));
-  }).sort((a,b)=>(rank[a.availability]??3)-(rank[b.availability]??3)||(b.verified-a.verified)||((+b.modules_done||0)-(+a.modules_done||0))||((b.badges||[]).length-(a.badges||[]).length));
+  }).map(r=>({r,t:status(r)})).sort((a,b)=>(a.t.rank-b.t.rank)||((a.t.conf??999)-(b.t.conf??999))||(b.r.verified-a.r.verified)).map(x=>x.r);
 }
 function card(r){
-  const open=st.open===r.id, av=AV[r.availability]||AV.available, gear=r.gear||[], badges=r.badges||[];
+  const open=st.open===r.id, t=status(r), gear=r.gear||[], badges=r.badges||[];
   const meta=[dn(r.dept),r.city,r.union_local].filter(Boolean).map(esc).join(" · ");
   let body="";
   if(open){
@@ -123,7 +136,7 @@ function card(r){
   return `<div class="crew"><button class="head" data-open="${esc(r.id)}" aria-expanded="${open}"><span class="av" aria-hidden="true">${esc(ini(r.name))}</span>
     <span class="g"><span class="nm">${esc(r.name)}${r.verified?`<span class="vchk" title="Set Ready Verified">✓</span>`:""}</span>
     ${r.positions?`<span class="pos">${esc(r.positions)}</span>`:""}${meta?`<span class="small muted">${meta}</span>`:""}
-    <span class="tags"><span class="pill ${av[1]}">${av[0]}</span>${cert(r)?`<span class="pill open">Set Ready Certified</span>`:""}${badges.length?`<span class="small muted">${badges.length} badge${badges.length===1?"":"s"}</span>`:""}${gear.length?`<span class="small muted">${gear.length} tools</span>`:""}</span></span></button>${body}</div>`;
+    <span class="tags"><span class="pill ${t.cls}">${esc(t.label)}</span>${confText(t)?`<span class="small muted">${confText(t)}</span>`:""}${cert(r)?`<span class="pill open">Set Ready Certified</span>`:""}${badges.length?`<span class="small muted">${badges.length} badge${badges.length===1?"":"s"}</span>`:""}${gear.length?`<span class="small muted">${gear.length} tools</span>`:""}</span></span></button>${body}</div>`;
 }
 function render(){
   if(st.err){$("#out").innerHTML=`<p class="muted small">Couldn’t load the directory right now. Refresh to try again.</p>`;return}
